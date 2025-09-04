@@ -1,0 +1,157 @@
+from fastapi import FastAPI,status,Depends,HTTPException,Query
+from sqlalchemy import create_engine,Column,Integer,String,BindParameter,text,Float
+from sqlalchemy.pool import QueuePool
+from sqlalchemy.orm import declarative_base,sessionmaker,Session
+from sqlalchemy.exc import SQLAlchemyError
+from pydantic import BaseModel,Field,EmailStr
+from fastapi.responses import HTMLResponse
+from typing import Optional
+
+app=FastAPI()
+
+DABASE_URL="mysql+mysqlconnector://root:root@127.0.0.1:3306/board"
+
+#연결객체 생성
+engine=create_engine(DABASE_URL)
+
+#sqlalchemy에서 모델 정의할때 상속받는 기본 클래스
+Base=declarative_base()
+
+class Items(Base):
+    __tablename__='items'
+    id=Column(Integer, primary_key=True)
+    name=Column(String(50), nullable=False)
+    price=Column(Float,nullable=False)
+    quantity=Column(Integer,nullable=False)
+
+Base.metadata.create_all(bind=engine)
+class itemCreate(BaseModel):
+    name:str=Field(...,max_length=50,min_length=3)
+    price:float=Field(...,gt=0)
+    quantity:int=Field(...,ge=1,le=100)
+
+#db의존성
+def get_db():
+    session =sessionmaker(bind=engine)()
+    try:
+        yield session
+    finally:
+        session.close()
+
+@app.get('/item')
+def sel_all_item(
+    min_price: float=Query(None,ge=0),
+    max_price: float=Query(None,ge=0),
+    db: Session=Depends(get_db)):
+
+    query = db.query(Items)
+    
+    if min_price is not None:
+        query=query.filter(Items.price >= min_price)
+    if max_price is not None:
+        query=query.filter(Items.price <= max_price)
+    
+    result=query.all()
+    return result
+    
+@app.get('/items/{item_id}')
+def sel_item(item_id:int, db:Session=Depends(get_db)):
+    db_item=db.query(Items).filter(Items.id == item_id).first()
+    if db_item is None:
+        return {'msg':'해당 상품은 찾을 수 없습니다.'}
+    return {'id':db_item.id,'item_name':db_item.name, 'itme_price':db_item.price, 'item_qty':db_item.quantity}
+
+@app.post('/items')
+def create_item(citem:itemCreate , db:Session=Depends(get_db)):
+    c_db=Items(name=citem.name, price=citem.price, quantity=citem.quantity )
+    db.add(c_db)
+    db.commit()
+    db.refresh(c_db)
+
+    return {"name":c_db.name, "price":c_db.price, "quantity":c_db.quantity }
+
+# #DB테이블 생성할때 sqlalchemy가 정보 사용할거다.
+# class Student(Base):
+#     __tablename__='student'
+    
+#     id=Column(Integer, primary_key=True, autoincrement=True)
+#     stu_name=Column(String(50), unique=True, nullable=False)
+#     email=Column(String(100), unique=True, nullable=False)
+
+
+
+
+# #pydantic 모델링
+# class StudentCreate(BaseModel):
+#     stu_name:str
+#     email:str
+
+# class StudentUpdate(BaseModel):
+#     stu_name:Optional[str]=None
+#     email: Optional[str]=None
+
+
+
+# def get_db():
+#     db=Session(bind=engine)
+#     try:
+#         yield db #제너레이터 함수 ->db객체를 라우터에 전달하기 위해
+#                 # /students에다 세션 객체 줄게.. 이따 꼭 닫아줘 
+#     finally:
+#         db.close() # 라우터 함수 종료 후 연결끊겠다.
+
+# Base.metadata.create_all(bind=engine)
+
+
+# #학생 추가(C : Create)
+# #자동으로 get_db()가 리턴한 Session객체가 db라는 매개변수에 들어간다.
+# #엔드포인트에서 ORM작업을 쉽게 할 수 있다 => 요청 끝나면 fastapi가 알아서 db.close()실행해준다.
+# @app.post("/students")
+# def create_stu(student:StudentCreate, db:Session=Depends(get_db)):
+#     #db에 추가
+#     add_stu=Student(stu_name=student.stu_name, email=student.email)
+#     db.add(add_stu) #세션에 객체 추가
+#     db.commit() #db에 실제 반영
+#     db.refresh(add_stu) #생성된 정보를 갱신 -> json
+
+#     return {"id":add_stu.id, "stu_name":add_stu.stu_name, "email":add_stu.email }
+
+
+# #조회
+# @app.get('/student/{stu_id}')
+# def read_stu(stu_id:int, db: Session=Depends(get_db)):
+#     db_stu=db.query(Student).filter(Student.id==stu_id).first()
+#     if db_stu is None:
+#         return{'error':'student not found'}
+#     return {'id':db_stu.id,'stu_name':db_stu.stu_name,'stu_email':db_stu.email}
+
+
+# #수정
+# @app.put('/student/{stu_id}')
+# def update_stu(stu_id:int, stuUpdate:StudentUpdate, db: Session=Depends(get_db)):
+#     db_stu=db.query(Student).filter(Student.id == stu_id).first()
+
+#     if db_stu is None:
+#         return {'error':'Student not found'}
+    
+#     if stuUpdate.stu_name is not None:
+#         db_stu.stu_name=stuUpdate.stu_name
+    
+#     if stuUpdate.email is not None:
+#         db_stu.email = stuUpdate.email
+
+#     db.commit()
+#     db.refresh(db_stu)
+#     return {'id': db_stu.id , 'stu_name':db_stu.stu_name,'stu_email':db_stu.email}
+
+# @app.delete('/student/{stu_id}')
+# def delete_stu(stu_id:int, db:Session= Depends(get_db)):
+#     db_stu=db.query(Student).filter(Student.id == stu_id).first()
+#     # db_stu=db.query(Student).filter(Student.id==stu_id).first()
+
+#     if db_stu is None:
+#         return {'msg':'student not found'}
+#     db.delete(db_stu)
+#     db.commit()
+
+#     return {'msg': '학생 삭제했습니다'}
