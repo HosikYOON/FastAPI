@@ -1,0 +1,297 @@
+from fastapi import FastAPI,APIRouter,Request,Query,Form,HTTPException,Path,Depends
+from starlette.middleware.sessions import SessionMiddleware 
+from pydantic import BaseModel,Field,EmailStr
+from fastapi.security import OAuth2PasswordBearer
+from datetime import timedelta,datetime
+from jwt import encode,decode
+import jwt
+from sqlalchemy import create_engine,Column,Integer,String,Float
+from sqlalchemy.orm import sessionmaker ,declarative_base,Session
+
+DATABASE_URL='mysql+mysqlconnector://root:root@127.0.0.1:3306/board'
+
+engine=create_engine(DATABASE_URL)
+
+SessionLocal=sessionmaker(bind=engine)
+
+Base=declarative_base()
+
+app=FastAPI()
+
+app.add_middleware(SessionMiddleware,secret_key='session_secret')
+
+#ORM (user, )
+class User(Base):
+    __tablename__='users'
+    id=Column(Integer, primary_key=True, autoincrement=True)
+    username=Column(String(50), nullable=False)
+    password=Column(String(20), nullable=False)
+    email=Column(String(50), nullable=False, unique=True)
+
+class Book(Base):
+    __tablename__='books'
+    id=Column(Integer, primary_key=True, autoincrement=True)
+    title=Column(String(50), nullable=False)
+    author=Column(String(50), nullable=False)
+    pages=Column(Integer)
+
+Base.metadata.create_all(bind=engine)
+
+class UserCreate(BaseModel):
+    username:str=Field(...,max_length=50)
+    password:str=Field(...,max_length=20)
+    email:EmailStr=Field(...)
+
+class BookCreate(BaseModel):
+    title:str=Field(...,max_length=50)
+    author:str=Field(...,max_length=50)
+    pages:int=Field(None)
+
+def get_db():
+    db=SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+SECRET_KEY='jwt-secret'
+ALGO='HS256'
+OAUTH2=OAuth2PasswordBearer(tokenUrl='token')
+
+@app.post('/createuser')
+def cuser(user:UserCreate, db:Session=Depends(get_db)):
+    users=db.query(User).filter(User.username==user.username).first()
+
+    if users:
+        raise HTTPException(status_code=404, detail='이미 존재')
+    
+    add_user=User(username=user.username,password=user.password,email=user.email)
+    db.add(add_user)
+    db.commit()
+    db.refresh(add_user)
+    return add_user
+
+@app.get('/users/{user_id}')
+def seluser(user_id:int, db:Session=Depends(get_db)):
+    userIF=db.query(User).filter(User.id==user_id).first()
+    if userIF:
+        return {'user_id':userIF.id ,'username':userIF.username, 'email':userIF.email}
+    else:
+        raise HTTPException(status_code=404 , detail='없는 아이디')
+ 
+
+#로그인
+
+@app.post('/login')
+def login(request:Request,
+          username:str=Query(...,max_length=50),
+          password:str=Query(...,max_length=20),
+          db:Session=Depends(get_db)):
+    
+    uck=db.query(User).filter(User.username == username).first()
+
+    if uck:
+        if uck.password == password:
+            request.session['id']={'id':uck.id ,'username':username}
+            return {'msg':'로그인성공','username':username}
+        else:
+            raise HTTPException(status_code=403, detail='패스워드 확인 필요')
+    else:
+        raise HTTPException(status_code=403, detail='알 수 없는 유저')
+
+#jwt
+@app.post('/token')
+def generate_token(username:str=Form(...), password:str=Form(...), db:Session=Depends(get_db)):
+    user=db.query(User).filter(User.username==username)
+
+    if user is None:
+        raise HTTPException(status_code=403, detail='알 수 없는 유저')
+    
+    if password != user.password:
+        raise HTTPException(status_code=403, detail='알 수 없는 유저')
+
+    data={'sub':username,'exp':datetime.utcnow()+timedelta(minutes=30)}
+    token=jwt.encode(data,SECRET_KEY,ALGO)
+    return{'token':token}
+
+@app.post('/createBook')
+def createB(book:BookCreate, db:Session=Depends(get_db)):
+    
+    check=db.query(Book).filter(Book.title == book.title and Book.author == book.author).first()
+    
+    if check:
+        raise HTTPException(status_code=404, detail='이미 존재하는 책입니다.')
+    
+    newBook=Book(title=book.title, author=book.author,pages=book.pages)
+    
+    db.add(newBook)
+    db.commit()
+    db.refresh(newBook)
+    return { 'title': book.title ,'author':book.author}
+
+@app.get('/book/{book_id}')
+def findBook(book_id:int=Path(...,ge=1),db:Session=Depends(get_db)):
+    check=db.query(Book).filter(Book.id==book_id).first()
+
+    if check is None:
+        raise HTTPException(status_code=404 ,detail='없는 책 이에요')
+    
+    return {'id':book_id,'title':check.title,'author':check.author}
+
+@app.get('/book/search')
+def SearchBook(title:str=Query(...,max_length=50),db:Session=Depends(get_db)):
+    check=db.query(Book).filter(Book.title==title).first()
+
+    if check is None:
+        raise HTTPException(status_code=404 ,detail='없는 책 이에요')
+    return {'msg':'찾는 책 있습니다','title':title}
+
+@app.
+    
+
+# app.add_middleware(SessionMiddleware,secret_key='secret_key')
+
+# #JWT
+# SECRET_KEY='jwt-secret'
+# ALGO='HS256'
+# OAUTH2=OAuth2PasswordBearer(tokenUrl='token')
+
+# #API라우터 > 모듈화된 기능을 위해
+# router=APIRouter()
+
+
+
+# movie=[]
+
+# #기본경로 들어갔을때 return movie
+
+# @router.get('/')
+# def get_movie():
+#     return {'movie':movie}
+
+# @router.post('/add')
+# def add_movie(
+#     request:Request,
+#     title:str=Form(...),
+#     rate:int=Form(...,ge=1,le=5),
+#     comment:str=Form(...)):
+#     try:
+#         movie_id=len(movie)+1
+#         movie_dick={'movie_id':movie_id,'title':title,'rate':rate,'comment':comment}
+#         movie.append(movie_dick)
+#         # movie_s=request.session.get('movie',[])
+#         request.session['last']=movie_dick
+
+#         return {'msg':'영화 추가','movie':movie_dick}
+#     except HTTPException as e:
+#         raise (e)
+
+# @router.get('/movie/{id}')
+# def f_movie(request:Request,
+#             id:int=Path(...)):
+#     for mo in movie:
+#         if mo['movie_id']==id:
+#             return {'movie_id':mo['movie_id'],'movie_comment':mo['comment']}
+
+# app.include_router(router,prefix='/movie')
+
+
+# user_db={'tom':'12345'}
+
+# @app.post('/token')
+# def check(username:str=Form(...),password:str=Form(...)):
+#     if username not in user_db:
+#         raise HTTPException(status_code=404,detail='user not found')
+    
+#     data={"sub":username, "exp":datetime.utcnow() + timedelta(minutes=30)}
+
+#     token=jwt.encode(data,SECRET_KEY,ALGO)
+
+#     return {'token':token}
+
+
+# @app.get('/verify/{movie_id}')
+# def verify_token(movie_id:int=Path(...,ge=1),cToken:str=Depends(OAUTH2)):
+    
+    
+#     try:
+#         token=jwt.decode(cToken,SECRET_KEY,ALGO)
+#         for mo in movie:
+#             if mo['movie_id']==movie_id:
+#                 return {'movie_id':mo['movie_id'],'movie_comment':mo['comment']}
+#     except:
+#         raise HTTPException(status_code=401 , detail='inverified user')
+    
+
+
+# @app.get('/get_movie')
+# def movie_info(request:Request):
+#     movie_info=request.session.get('last')
+    
+#     if movie_info is None:
+#         raise HTTPException(status_code=404,detail='영화 없음')
+#     return {'msg':'영화 정보','영화':movie_info}
+
+
+# 데이터 -> 쿠키에 저장
+# max_age 는 유효기간
+# app.add_middleware(SessionMiddleware
+#                    ,secret_key='secret_key',
+#                    max_age=60)
+
+
+
+
+# @app.post('/answer')
+# def answer1(request:Request,
+#             question_id:int=Query(...),
+#             answer:str=Query(...)):
+#     proB= {question_id:answer}
+#     pro_l=request.session.get('proB',[])
+#     pro_l.append(proB)
+#     request.session['proB']=pro_l
+#     return {'msg':'추가된 문제번호와 답변','id,답변':proB}
+    
+    
+    
+# @app.get('/get_answer')
+# def get_a(request:Request):
+#     proList=request.session.get('proB',[])
+
+#     if proList is None:
+#         raise HTTPException(status_code=404, detail='등록된 문제가 없습니다')
+#     return {'msg':'등록된 문제는','list':proList}
+
+
+# #세션 쿠키, 쿠키안에 세션정보가 들어있다
+# @app.post('/addcart')
+# def addcart(request:Request, item:str=Query(...)):
+#     try:
+#         cart=request.session.get('cart',[])
+#         cart.append(item)
+#         request.session['cart']=cart
+#         return {'msg':'추가됨','cart':cart}
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail='장바구니 추가 안됨')
+
+# @app.get('/cart')
+# def cart_list(request:Request):
+#     c_list=request.session.get('cart') or []
+#     if c_list is not None:
+#        return {'msg': '장바구니 리스트:','list':c_list}
+#     else:
+#         raise HTTPException(status_code=404, detail='장바구니가 비었습니다.')
+
+# @app.post('/session1')
+# def set_session(request:Request):
+#     request.session['username']='tom'
+#     return {'msg':'session value'}
+
+
+# #get-> 쿠키값있으면 tom , 없으면 dom
+# #세션쿠키 값을 같이 전송 - get 요청시
+# # 서버쪽에서 클라이언트가 보낸 세션쿠키를 해석해서
+# @app.get('/get')
+# def get_session(request:Request):
+#     username=request.session.get('username','dom')
+#     return {"username": username}
